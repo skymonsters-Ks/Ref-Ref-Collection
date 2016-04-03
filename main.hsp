@@ -1,0 +1,356 @@
+; HSP 3.5b3
+
+#define global CAPTION  "Ref Ref Collection"
+#define global CAPTION2 "リフコレ"
+#define global VERSION  "v0.2.0.0"
+
+#define global WIN_SX 200
+#define global WIN_SY 450
+
+#include "sqlele.hsp"
+#include "hspcmp.as"
+#include "gdi32.as"
+
+
+#module
+
+#uselib "kernel32"
+#func GetEnvironmentVariable "GetEnvironmentVariableA" sptr, sptr, sptr
+
+; HSP が使う Application Data の Path を取得
+; S.Programs HDL 汎用ライブラリ より
+;
+#deffunc get_hsp_appdata_path array v1
+
+	org_dir = dir_cur
+	sdim v1, 1000
+	GetEnvironmentVariable "APPDATA", varptr(v1), 990
+	if "" ! v1 {
+		subdir = "Hot Soup Processor"
+		chdir v1
+		dirlist astr, subdir, 5 : if stat = 0 : mkdir subdir // MAKEDIR subdir
+		chdir org_dir
+		v1 += "\\" + subdir
+	}
+	if "" = v1 : v1 = org_dir
+	return
+
+
+; hspsdk/hdl/hdl_cgi.hsp より
+;
+#defcfunc StrHash var inp
+
+	a = 0
+	repeat 2 ; (1.32)
+		repeat strlen(inp)
+			a = a * 137 + peek(inp, cnt)
+		loop
+	loop
+	return strf("X%08X", a)
+
+
+; 2byte文字・マークアップ記号・改行を実体参照に変換（"亜" -> "&#x4E9C;"）
+;
+#defcfunc cnvEntity str _s
+
+	src = _s
+	len = strlen(src)
+	sdim res, len * 4
+	p = 0
+	repeat
+		if (p == len) : break
+		c = peek(src, p)
+		sdim ts
+		poke ts, , peek(src, p)
+		if (((c ^ $20) - $a1 & $ff) <= $3b) {
+			poke ts, 1, peek(src, p + 1)
+			cnvstow s, ts
+			res += strf("&#x%X;", wpeek(s))
+			p += 2
+		} else {
+			switch c
+			case $0a : res += "&#xA;"  : swbreak ; LF
+			case $0d : res += "&#xD;"  : swbreak ; CR
+			case $22 : res += "&quot;" : swbreak ; "
+			case $26 : res += "&amp;"  : swbreak ; &
+			case $27 : res += "&apos;" : swbreak ; '
+			case $3c : res += "&lt;"   : swbreak ; <
+			case $3e : res += "&gt;"   : swbreak ; >
+			default  : res += ts
+			swend
+			p++
+		}
+	loop
+	return res
+	
+#global
+
+
+
+	screen 0, WIN_SX, WIN_SY, 2
+	title strf("%s - %s %s", CAPTION2, CAPTION, VERSION)
+	
+	get_hsp_appdata_path ap
+	e = dir_exe + "\\hdl.exe"
+	f = "hdl_data_" + StrHash(e)
+	fp = ap + "\\" + f + ".db"
+	exist fp
+	if (strsize < 0) {
+		dialog "HDLデータベースが存在しません"
+		end
+	}
+	tmpfp = ap + "\\" + f + "_tmp.db"
+	bcopy fp, tmpfp
+	sql_open tmpfp
+	
+	sdim modname
+	sql_q "SELECT Mod FROM Help GROUP BY Mod ORDER BY lower(Mod)"
+	modnum = stat
+	repeat stat
+		m = sql_v("Mod")
+		if (m == "") {
+			m = "標準機能"
+		}
+		modname(cnt) = m
+		sql_next
+	loop
+	dim addmod, modnum
+	
+	sdim word_cmp, 2000, 3
+	sdim buf, 10000
+	hsc3_getsym
+	hsc_getmes buf
+	notesel buf
+	repeat notemax
+		noteget ts, cnt
+		split ts, ",", res
+		n = strtrim(res(0), 2, '\t')
+		m = strmid(res(1), 0, 5)
+		if (m == "sys|f") : word_cmp(0) += n + " "
+		if (m == "pre|f") : word_cmp(1) += n + " "
+		if (m == "sys|m") : word_cmp(2) += n + " "
+	loop
+	noteunsel
+	repeat 3
+		word_cmp(cnt) = strtrim(word_cmp(cnt), 2, ' ')
+	loop
+	word_cmp_group = "", "_プリプロセッサ", "_マクロ"
+	; memo: hsとhspcmpのグループは異なるものがある
+	; hspcmpの方が多分正しいので'_'を付けてsql取得で先に来るようにしてる
+	
+	outmode =         "TeraPad keyword"       : rtMakeRef(0) = *rtTeraKey
+	outmode += "\n" + "Notepad++ API"         : rtMakeRef(1) = *rtNppApi
+	outmode += "\n" + "txt (space delimiter)" : rtMakeRef(2) = *rtTxtKey_space
+	outmode += "\n" + "txt (line delimiter)"  : rtMakeRef(3) = *rtTxtKey_line
+	; outmode += "\n" + "--------------------"  : rtMakeRef(-) = *rt-----------
+	outtype = 0
+	
+	syscolor 15
+	boxf
+	; syscolor 8
+	; sysfont 17
+	
+	pos 20, 20
+	winobj "listbox", "", $200, $50200801, 160, 340
+	lboxId = objinfo(stat, 2)
+	GetStockObject 17
+	sendmsg lboxId, $30, stat
+	foreach modname
+		sendmsg lboxId, $180, , modname(cnt) ; LB_ADDSTRING
+	loop
+	sendmsg lboxId, $185, 1, 0 ; LB_SETSEL
+	
+	pos 20, 360
+	objsize 160, 24
+	combox outtype, 100, outmode
+	
+	pos 20, 390
+	objsize 160, 40
+	button gosub "作成", *createRef
+
+	onexit goto *bye
+	
+	gsel 0, 1
+	stop
+
+*bye
+	sql_close
+	exist tmpfp
+	if (strsize >= 0) {
+		delete tmpfp
+	}
+	end
+	end
+	end
+
+	
+*createRef
+	sendmsg lboxId, $190 ; LB_GETSELCOUNT
+	if (stat == 0) {
+		dialog "モジュールを選択してください"
+		return
+	}
+	
+	foreach addmod
+		sendmsg lboxId, $187, cnt ; LB_GETSEL
+		addmod(cnt) = stat
+	loop
+	
+	sql_q "BEGIN"
+	if (addmod(0)) {
+		repeat 3 : i = cnt
+			split word_cmp(i), " ", word
+			repeat stat
+				sql_q "INSERT INTO Help(Name, Mod, Group3) VALUES ('" + sqesc(word(cnt)) + "', '_CmpWord_', '" + word_cmp_group(i) + "')"
+			loop
+		loop
+	}
+	sql_q "COMMIT"
+	
+	gosub rtMakeRef(outtype)
+	
+	if (addmod(0)) {
+		sql_q "DELETE FROM Help WHERE Mod = '_CmpWord_'"
+	}
+
+	return
+
+
+*setReqmod
+	sdim reqmod
+	foreach addmod
+		if (addmod(cnt)) {
+			ts = modname(cnt)
+			if (ts == "標準機能") {
+				ts = "' OR Mod='_CmpWord_"
+			}
+			if (reqmod != "") {
+				reqmod += " OR "
+			}
+			reqmod += "Mod='" + ts + "'"
+		}
+	loop
+	return
+
+
+*rtTeraKey
+	gosub *setReqmod
+	req = "ltrim(Name,'#')"
+	sql_q strf("SELECT DISTINCT upper(%s) FROM Help WHERE (%s) ORDER BY lower(%s)", req, reqmod, req)
+	num = stat
+	sdim refBuf, num * 32
+	refBuf = "#\n@\n"
+	repeat num
+		refBuf += sql_v("upper(" + req + ")") + "\n"
+		sql_next
+	loop
+	ext = "kwd"
+	gosub *saveFile
+	return
+
+
+*rtTxtKey_line
+	delimiter = "\n"
+	gosub *@f
+	return
+*rtTxtKey_space
+	delimiter = " "
+	gosub *@f
+	return
+*@
+	ext = "txt"
+	dialog "モジュール別に出力しますか？\n（標準機能は マクロ・プリプロセッサ・その他 に分けられます）", 2
+	if (stat == 6) {
+		foreach addmod
+			if (addmod(cnt)) {
+				ts = modname(cnt)
+				if (ts == "標準機能") {
+					sql_q "SELECT DISTINCT lower(Name),Group3 FROM Help WHERE Mod='' OR Mod='_CmpWord_' ORDER BY lower(Name)"
+					num = stat
+					sdim refBuf1, num * 32
+					sdim refBuf2, num * 32
+					sdim refBuf3, num * 32
+					prename = ""
+					repeat num
+						name = sql_v("lower(Name)")
+						grp = sql_v("Group3")
+						if (name == prename) {
+							sql_next
+							continue
+						}
+						prename = name
+						if (instr(grp, 0, "マクロ") >= 0) {
+							refBuf1 += name + delimiter
+						} else : if (instr(grp, 0, "プリプロセッサ") >= 0) {
+							refBuf2 += name + delimiter
+						} else {
+							refBuf3 += name + delimiter
+						}
+						sql_next
+					loop
+					dialog "標準機能（マクロ）を出力します"
+					refBuf = refBuf1
+					gosub *saveFile
+					dialog "標準機能（プリプロセッサ）を出力します"
+					refBuf = refBuf2
+					gosub *saveFile
+					dialog "標準機能（その他）を出力します"
+					refBuf = refBuf3
+					gosub *saveFile
+				} else {
+					sql_q "SELECT DISTINCT lower(Name) FROM Help WHERE Mod='" + ts + "' ORDER BY lower(Name)"
+					num = stat
+					sdim refBuf, num * 32
+					repeat num
+						refBuf += sql_v("lower(Name)") + delimiter
+						sql_next
+					loop
+					dialog ts + " を出力します"
+					gosub *saveFile
+				}
+			}
+		loop
+	} else {
+		gosub *setReqmod
+		sql_q "SELECT DISTINCT lower(Name) FROM Help WHERE " + reqmod + " ORDER BY lower(Name)"
+		num = stat
+		sdim refBuf, num * 32
+		repeat num
+			refBuf += sql_v("lower(Name)") + delimiter
+			sql_next
+		loop
+		gosub *saveFile
+	}
+	return
+
+
+*rtNppApi
+	gosub *setReqmod
+	req = "ltrim(Name,'#')"	
+	sql_q strf("SELECT DISTINCT lower(%s) FROM Help WHERE (%s) ORDER BY lower(%s)", req, reqmod, req)
+	num = stat
+	
+	#define ctype cnvRes(%1) cnvEntity(sql_v(%1))
+	
+	sdim refBuf, num * 40
+	refBuf += "<?xml version=\"1.0\" encoding=\"Windows-1252\" ?>\n<NotepadPlus>\n\t<AutoComplete language=\"HSP\">\n\t\t<Environment ignoreCase=\"yes\" />\n"
+	repeat num
+		refBuf += "\t\t<KeyWord name=\"" + cnvRes("lower(" + req + ")") + "\"/>\n"
+		sql_next
+	loop
+	refBuf += "\t</AutoComplete>\n</NotepadPlus>\n"
+	
+	ext = "xml"
+	gosub *saveFile
+	return
+
+
+*saveFile
+	sz = strlen(refBuf)
+	dialog ext, 17
+	if (stat) {
+		fn = refstr
+		bsave fn, refBuf, sz
+		dialog fn + " を保存しました\n(" + sz  + " byte)"
+	}
+	return
