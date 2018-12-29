@@ -41,12 +41,10 @@
 #defcfunc StrHash var inp
 
 	a = 0
-	repeat 2 ; (1.32)
-		repeat strlen(inp)
-			a = a * 137 + peek(inp, cnt)
-		loop
+	repeat strlen(inp)
+		a = a * 137 + peek(inp, cnt)
 	loop
-	return strf("X%08X", a)
+	return a
 
 
 ; 2byte文字・マークアップ記号・改行を実体参照に変換（"亜" -> "&#x4E9C;"）
