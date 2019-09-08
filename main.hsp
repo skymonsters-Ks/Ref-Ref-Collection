@@ -232,6 +232,7 @@
 
 
 *rtTeraKey
+	delimiter = "\n"
 	gosub *setReqmod
 	req = "ltrim(Name,'#')"
 	sql_q strf("SELECT DISTINCT upper(%s) FROM Help WHERE (%s) ORDER BY lower(%s)", req, reqmod, req)
@@ -239,7 +240,7 @@
 	sdim refBuf, num * 32
 	refBuf = "#\n@\n"
 	repeat num
-		refBuf += sql_v("upper(" + req + ")") + "\n"
+		refBuf += sql_v("upper(" + req + ")") + delimiter
 		sql_next
 	loop
 	ext = "kwd"
@@ -348,7 +349,7 @@
 	dialog ext, 17
 	if (stat) {
 		fn = refstr
-		bsave fn, refBuf, sz
+		bsave fn, refBuf, sz - strlen(delimiter)
 		dialog fn + " ‚ð•Û‘¶‚µ‚Ü‚µ‚½\n(" + sz  + " byte)"
 	}
 	return
